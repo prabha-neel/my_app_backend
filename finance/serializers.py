@@ -75,3 +75,6 @@ class FeeEntrySerializer(serializers.ModelSerializer):
             validated_data['reference_no'] = f"PAY-{timestamp}"
             
         return super().create(validated_data)
+    
+
+    

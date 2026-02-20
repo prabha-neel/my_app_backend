@@ -2,12 +2,17 @@
 import logging
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.db.models import Sum, Q, Count
+from django.utils import timezone
+from decimal import Decimal
 from rest_framework import viewsets, permissions, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.throttling import UserRateThrottle, ScopedRateThrottle
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
 from .models import Organization, SchoolAdmin
 from .serializers import OrganizationSerializer, SchoolAdminProfileSerializer
@@ -19,6 +24,10 @@ from .serializers import (
     SchoolAdminProfileSerializer,
     SchoolAdminUserSerializer     # <--- Login logic ke liye zaruri hai
 )
+from students.models import StudentProfile
+from teachers.models import Teacher
+from attendance.models import Attendance
+from finance.models import FeePayment
 
 # Custom Permissions Import (Inhe check kar lena tumhare permissions.py mein hain)
 # from .permissions import IsStaffOrReadOnly, IsOrganizationMember
@@ -176,3 +185,76 @@ class SchoolAdminViewSet(viewsets.ModelViewSet):
             'is_active': profile.is_active,
             'message': f"Admin profile has been successfully {status_str}."
         }, status=status.HTTP_200_OK)
+
+
+# Note: AdmissionRequest aur Notice agar alag app mein hain toh yahan import check kar lena
+# Abhi ke liye safe filters use kiye hain.
+
+class AdminDashboardAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # 1. Setup: Organization & Dates
+        # Check if user has organization or through SchoolAdmin profile
+        school = getattr(request.user, 'organization', None) 
+        if not school and hasattr(request.user, 'school_admin_profile'):
+            school = request.user.school_admin_profile.first().organization
+
+        today = timezone.now().date()
+        month_start = today.replace(day=1)
+
+        # 2. Stats: Counts
+        total_students = StudentProfile.objects.filter(organization=school, is_active=True).count()
+        total_teachers = Teacher.objects.filter(organization=school, is_active_teacher=True).count()
+
+        # 3. Student Attendance (Using your Attendance model)
+        s_attendance = Attendance.objects.filter(student__organization=school, date=today)
+        student_stats = {
+            "present": s_attendance.filter(status='PRESENT').count(),
+            "absent": s_attendance.filter(status='ABSENT').count(),
+            "leave": s_attendance.filter(status='LEAVE').count(),
+        }
+
+        # 4. Teacher Attendance (Static for now as model was missing)
+        # Future: Create a TeacherAttendance model similar to Student Attendance
+        teacher_stats = {"present": 0, "absent": 0, "leave": 0} 
+
+        # 5. Finance Stats (Using FeePayment)
+        fee_qs = FeePayment.objects.filter(student__organization=school, status='SUCCESS')
+        
+        today_fee = fee_qs.filter(date__date=today).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+        monthly_fee = fee_qs.filter(date__date__gte=month_start).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+
+        # 6. Recent Admissions (Placeholder logic based on newest students)
+        # Agar AdmissionRequest model hai toh use yahan query karein
+        recent_students = StudentProfile.objects.filter(organization=school).order_by('-created_at')[:5]
+        admissions_data = [
+            {
+                "student_name": s.user.get_full_name() or s.user.username,
+                "class_name": s.current_standard.name if s.current_standard else "N/A",
+                "status": "Verified" if s.is_active else "Pending"
+            } for s in recent_students
+        ]
+
+        # 7. Latest Notices (Placeholder - replace with Notice.objects query)
+        notices_data = [
+            {
+                "title": "Welcome to Dashboard",
+                "subtitle": "System updated with your models",
+                "date": "Today"
+            }
+        ]
+
+        # Final Response matching your exact Flutter/React requirement
+        return Response({
+            "total_students": total_students,
+            "total_teachers": total_teachers,
+            "student_attendance": student_stats,
+            "teacher_attendance": teacher_stats,
+            "fee_stats": {
+                "today": f"{today_fee:,.0f}", # 18,500 format
+                "monthly": f"{monthly_fee:,.0f}" # 4,72,000 format
+            },
+            "recent_admissions": admissions_data,
+            "latest_notices": notices_data,
+        })
