@@ -42,16 +42,30 @@ class VehicleDetailView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Vehicle.objects.filter(organization__admin=self.request.user)
+        # 🛡️ Yahan filter ko flexible karo taaki 404 na aaye
+        user = self.request.user
+        if hasattr(user, 'school_admin_profile'):
+            org_ids = user.school_admin_profile.values_list('organization_id', flat=True)
+            return Vehicle.objects.filter(organization_id__in=org_ids)
+        # Agar purana logic 'admin' field use kar raha hai toh fallback:
+        return Vehicle.objects.filter(organization__admin=user)
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
         serializer = self.get_serializer(instance)
+        
+        # 🎯 Jo tune manga: Detail + Route Info
         data = serializer.data
-        # Objective 2: Check if route exists, else frontend can show 'Add Route'
+        
+        # Agar route null hai (jo ki naye vehicle par hoga hi)
         if not instance.route if hasattr(instance, 'route') else True:
-            data['message'] = "No route assigned. You can add a route now."
-        return Response(data)
+            data['route'] = None  # Frontend ko null milega
+            data['action_required'] = "ADD_ROUTE"
+            data['message'] = "Bhai, gaadi toh aa gayi par rasta (route) abhi set nahi hai. Add Route par click karo!"
+        
+        # Response 200 OK ke saath jayega (Django default for retrieve)
+        # Agar tujhe strictly 201 chahiye toh status bhej sakte ho, par 200 standard hai GET ke liye.
+        return Response(data, status=status.HTTP_200_OK)
 
 # Objective 3: Route List and Vehicle Details
 class RouteListView(generics.ListAPIView):
