@@ -28,6 +28,46 @@ class TeacherViewSet(viewsets.ModelViewSet):
             return TeacherPublicSerializer
         return TeacherProfileSerializer
 
+    # ==================================================================================================
+# =================================shivam changes ==================================================
+# ==================================================================================================
+    @action(detail=False, methods=['get'], url_path='dropdown-list')
+    def dropdown_list(self, request):
+       """
+       🚀 Clean Teacher List:
+       Sirf ID, Name aur Primary Subject bhejega.
+       """
+       school_id = request.headers.get('School-ID') or request.headers.get('school_id')
+      
+       # Base filters (Security first)
+       queryset = self.queryset
+       if school_id:
+           queryset = queryset.filter(organization_id=school_id)
+
+       # Response format karna
+       formatted_data = []
+       for teacher in queryset.select_related('user'):
+           # Maan lo subject_expertise ek JSON field hai ya Dict hai
+           subject_info = teacher.subject_expertise
+           primary_subject = "General"
+          
+           # Agar subject_expertise string hai toh seedha use karo,
+           # agar dict/JSON hai toh 'primary' key uthao
+           if isinstance(subject_info, dict):
+               primary_subject = subject_info.get('primary', 'General')
+           elif isinstance(subject_info, str):
+               primary_subject = subject_info
+
+           formatted_data.append({
+               "id": str(teacher.id),
+               "full_name": teacher.user.get_full_name(),
+               "subject": primary_subject
+           })
+      
+       return Response(formatted_data, status=200)
+
+# ==================================================================================================
+
     @action(detail=False, methods=['get', 'patch'], url_path='me')
     def me(self, request):
         """Teacher apni profile /api/teachers/me/ par manage karega"""

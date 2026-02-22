@@ -213,28 +213,38 @@ class StudentActionRequestView(generics.UpdateAPIView):
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
         connection = self.get_object()
-        new_status = request.data.get('status') # 'ACCEPTED' or 'REJECTED'
+        new_status = request.data.get('status') # Frontend se 'ACCEPTED' ya 'REJECTED' aayega
 
-        # Security Check
+        # 🛡️ SECURITY LOCK: Sirf wahi bacha action le sake jiske liye request aayi hai
         if connection.student.user != request.user:
-            return Response({"error": "Bhai, ye tumhara account nahi hai!"}, status=403)
+            return Response({"error": "Bhai, ye request aapke liye nahi hai! Dusre ki request mat chedo."}, status=403)
 
+        # ✅ ACCEPT LOGIC (Aapka Purana Logic)
         if new_status == 'ACCEPTED':
             connection.status = 'ACCEPTED'
             connection.save()
-            
-            # 🔥 Role Switch Logic
+                
+            # Role Switch
             parent_user = connection.user
             parent_user.role = parent_user.Roles.PARENT 
             parent_user.save()
             
-            return Response({"message": f"Mubarak ho! {parent_user.username} ab aapka Parent hai."})
+            return Response({
+                "status": "ACCEPTED",
+                "message": f"Mubarak ho! {parent_user.username} ab aapka Parent hai."
+            })
         
+        # ❌ REJECT LOGIC (Jiske liye humne ye changes kiye)
         elif new_status == 'REJECTED':
             connection.status = 'REJECTED'
             connection.save()
-            return Response({"message": "Request reject kar di gayi hai."})
+            
+            return Response({
+                "status": "REJECTED",
+                "message": "Request reject kar di gayi hai."
+            })
 
+        # ⚠️ INVALID STATUS
         return Response({"error": "Invalid status. Sirf ACCEPTED ya REJECTED bhejo."}, status=400)
     
 

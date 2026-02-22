@@ -258,3 +258,17 @@ class AdminDashboardAPIView(APIView):
             "recent_admissions": admissions_data,
             "latest_notices": notices_data,
         })
+    
+    # OrganizationViewSet mein ye action add karein
+    @action(detail=True, methods=['post'], url_path='reject-admission')
+    def reject_admission(self, request, pk=None):
+        # Maan lo aap AdmissionRequest model use kar rahe hain
+        admission_req = get_object_or_404(AdmissionRequest, pk=pk)
+        
+        # Check: Kya admin ka school aur request ka school same hai?
+        if not request.user.school_admin_profile.filter(organization=admission_req.organization).exists():
+            return Response({"error": "Unauthorized!"}, status=403)
+
+        admission_req.status = 'REJECTED'
+        admission_req.save()
+        return Response({"message": "Admission rejected."})

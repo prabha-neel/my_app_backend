@@ -433,3 +433,19 @@ class JoinRequestViewSet(viewsets.ModelViewSet):
             "message": "Aapki request bhej di gayi hai! 👍",
             "session_code": join_request.session.session_code
         }, status=status.HTTP_201_CREATED)
+    
+    
+    @action(detail=True, methods=['post'], url_path='reject')
+    def reject(self, request, pk=None):
+        join_req = self.get_object()
+        user = request.user
+        
+        # Check: Kya reject karne wala isi school ka admin hai?
+        is_admin = user.school_admin_profile.filter(organization=join_req.session.organization).exists()
+        
+        if not is_admin: # <--- Security Lock
+            return Response({"error": "Aap is school ke admin nahi hain!"}, status=403)
+
+        join_req.status = 'REJECTED'
+        join_req.save()
+        return Response({"message": "Request reject ho gayi."})
