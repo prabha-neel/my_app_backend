@@ -8,13 +8,14 @@ from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 import pytz
 from django.conf import settings
-
-from .models import FeePayment, FeeCategory, FeeStructure
+from rest_framework.throttling import UserRateThrottle
+from .models import FeePayment, FeeCategory, FeeStructure, StaffSalary
 from .serializers import (
   FeePaymentSerializer,
   FeeEntrySerializer,
   FeeCategorySerializer,
-  FeeStructureCreateSerializer
+  FeeStructureCreateSerializer,
+  AdminSalarySerializer
 )
 from .pagination import FinancePagination
 
@@ -216,3 +217,27 @@ class FeeStructureViewSet(viewsets.ModelViewSet):
            return Response({"message": "Deleted successfully"}, status=200)
        except Standard.DoesNotExist:
            return Response({"error": "Not found"}, status=404)
+
+
+class SalaryManagementViewSet(viewsets.ModelViewSet):
+    # 'select_related' lagaya hai taaki database query fast ho (Industry Level)
+    queryset = StaffSalary.objects.all().select_related('teacher__user', 'processed_by')
+    serializer_class = AdminSalarySerializer
+    permission_classes = [IsAuthenticated] 
+    throttle_classes = [UserRateThrottle] # Rate limiting protection
+
+    def get_queryset(self):
+        # Strict School Isolation
+        school_id = self.request.headers.get('school_id') or self.request.headers.get('School-ID')
+        if not school_id:
+            return self.queryset.none()
+        return self.queryset.filter(teacher__organization_id=school_id)
+
+    @transaction.atomic
+    def perform_create(self, serializer):
+        # Salary approve karne wale admin ka record auto-save
+        serializer.save(processed_by=self.request.user)
+
+    @transaction.atomic
+    def perform_update(self, serializer):
+        serializer.save(processed_by=self.request.user)

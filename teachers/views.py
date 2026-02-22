@@ -6,6 +6,9 @@ from django.shortcuts import get_object_or_404
 from .models import Teacher
 from .serializers import TeacherPublicSerializer, TeacherProfileSerializer
 from .permissions import IsTeacherOwnerOrSchoolAdmin
+from finance.models import StaffSalary
+from finance.serializers import TeacherSalarySerializer
+from rest_framework.permissions import IsAuthenticated 
 
 class TeacherViewSet(viewsets.ModelViewSet):
     """
@@ -82,3 +85,13 @@ class TeacherViewSet(viewsets.ModelViewSet):
             {"message": "Join request sent successfully! Wait for school admin to accept."}, 
             status=status.HTTP_201_CREATED
         )
+    
+
+class MySalaryView(viewsets.ReadOnlyModelViewSet):
+    """Teacher logged in hai toh sirf apna hi data dekhega"""
+    serializer_class = TeacherSalarySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Database level filter on request.user (Security Layer)
+        return StaffSalary.objects.filter(teacher__user=self.request.user).order_by('-year', '-month')

@@ -4,8 +4,8 @@ from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from decimal import Decimal
-from datetime import datetime  # 👈 Ye line missing hai
 from django.utils import timezone # 👈 Isse top par import karo
+
 
 class FeeCategory(models.Model):
    """Fees ke types: Tuition, Exam, Transport, Library etc."""
@@ -80,3 +80,25 @@ class FeePayment(models.Model):
 
    def __str__(self):
        return f"{self.receipt_no} - {self.student.user.get_full_name()}"
+
+
+class StaffSalary(models.Model):
+    STATUS_CHOICES = [('PAID', 'Paid'), ('PENDING', 'Pending'), ('HOLD', 'Hold')]
+    
+    teacher = models.ForeignKey('teachers.Teacher', on_delete=models.CASCADE, related_name='salaries')
+    amount = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal('0.00'))])
+    month = models.PositiveSmallIntegerField() # 1-12
+    year = models.PositiveIntegerField()
+    status = models.CharField(max_length=15, choices=STATUS_CHOICES, default='PENDING')
+    payment_mode = models.CharField(max_length=20, default='BANK_TRANSFER')
+    transaction_id = models.CharField(max_length=100, blank=True, null=True)
+    paid_date = models.DateField(null=True, blank=True)
+    
+    # Audit trail: Kisne salary approve/pay ki
+    processed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('teacher', 'month', 'year')
+        ordering = ['-year', '-month']
