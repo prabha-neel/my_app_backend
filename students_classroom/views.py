@@ -83,7 +83,28 @@ class StandardViewSet(viewsets.ModelViewSet):
         if self.action == "assign_teacher":
             return AssignClassTeacherSerializer
         return super().get_serializer_class()
-    
+
+    @action(detail=False, methods=['get'], url_path='dropdown-list')
+    def dropdown_list(self, request):
+       """
+       🚀 Specially for Dropdowns:
+       Returns all sections with their IDs for the current school.
+       """
+       queryset = self.get_queryset() # Ye automatic school filter apply kar dega
+      
+       # Performance ke liye sirf zaroori fields uthao
+       data = queryset.values('id', 'name', 'section')
+      
+       formatted_data = [
+           {
+               "id": item['id'],
+               "display_name": f"{item['name'].capitalize()} - {item['section']}" if item['section'] else item['name'].capitalize()
+           } for item in data
+       ]
+      
+       return Response(formatted_data, status=200)
+
+
     @action(detail=True, methods=['post'], url_path='assign-teacher')
     def assign_teacher(self, request, pk=None):
         standard = self.get_object()
