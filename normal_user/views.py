@@ -11,7 +11,7 @@ from django_ratelimit.decorators import ratelimit
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 from rest_framework.throttling import UserRateThrottle
 import logging
-from .serializers import SignupSerializer, LoginSerializer, AccountDeleteSerializer, NormalUserSignupSerializer
+from .serializers import SignupSerializer, LoginSerializer, AccountDeleteSerializer, NormalUserSignupSerializer, UserIdentitySerializer
 from .models import NormalUser
 from organizations.serializers import OrganizationDetailSerializer, SchoolAdminUserSerializer
 from organizations.models import Organization, SchoolAdmin

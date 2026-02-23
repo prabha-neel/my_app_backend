@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     'normal_user',
     'organizations',
     'teachers',
+    'staff',
     'students',
     'students_classroom',
     'attendance', 
@@ -143,6 +144,7 @@ REST_FRAMEWORK = {
         'organization_api': '100/day',
         'user': '1000/day',   # <-- Ye line zaroori hai (Fixes the KeyError: 'user')
         'anon': '100/day',    # <-- Safety ke liye
+        'attendance_ops':'30/minute',
     },
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
