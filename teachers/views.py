@@ -12,6 +12,9 @@ from finance.models import StaffSalary
 from finance.serializers import TeacherSalarySerializer
 from rest_framework.permissions import IsAuthenticated 
 from django.db import transaction
+from academics.models import WeeklyTimetable
+from students_classroom.models import Standard
+
 
 class TeacherViewSet(viewsets.ModelViewSet):
     """
@@ -133,47 +136,57 @@ class TeacherViewSet(viewsets.ModelViewSet):
     @transaction.atomic
     def remove_from_school(self, request, pk=None):
         """
-        Bhai ye wo function hai jo teacher ko school se azad karega, 
-        lekin uska marketplace profile aur purana data safe rakhega.
+        Bhai ye function strictly teacher ko organization se unlink karega,
+        unka data safe rakhega aur purane role par wapas bhej dega.
         """
         try:
-            # 1. Teacher ko dhoondo
-            teacher = self.get_object()
-            org_obj = teacher.organization
+            # 1. Teacher ko direct fetch karo (Avoid RelatedManager error)
+            # pk wahi UUID hai jo URL mein aa rahi hai
+            try:
+                teacher = Teacher.objects.get(pk=pk)
+            except Teacher.DoesNotExist:
+                return Response({"error": "Teacher record nahi mila!"}, status=404)
 
+            # 2. Check karo ki teacher kisi school se juda bhi hai ya nahi
+            org_obj = teacher.organization
             if not org_obj:
                 return Response({"error": "Ye teacher pehle se hi kisi school se juda nahi hai."}, status=400)
 
-            # Security: Kya request karne wala admin isi school ka owner hai?
+            # 3. Security Check: Kya ye request karne wala Admin isi school ka owner hai?
             if org_obj.admin != request.user:
                 return Response({"error": "Bhai, aapke paas is teacher ko hatane ka haq nahi hai!"}, status=403)
 
             user = teacher.user
 
-            # 2. TIMETABLE CLEANUP (Jo tune bola)
+            # 4. TIMETABLE CLEANUP
+            # School ke timetable se is teacher ki entries saaf karo
             WeeklyTimetable.objects.filter(organization=org_obj, teacher=teacher).delete()
             
-            # 3. CLASS TEACHER REMOVAL
+            # 5. CLASS TEACHER REMOVAL
+            # Agar kisi class ka class teacher tha, toh wo slot khali karo
             Standard.objects.filter(organization=org_obj, class_teacher=teacher).update(class_teacher=None)
 
-            # 4. ROLE RESTORATION (Independent Teacher vs Normal User)
-            if not teacher.qualifications or teacher.qualifications.strip() == "":
+            # 6. ROLE RESTORATION
+            # Qualifications ke basis par Independent Teacher ya Normal User banao
+            if not teacher.qualifications or not teacher.qualifications.strip():
                 user.role = 'NORMAL_USER'
             else:
                 user.role = 'TEACHER' # Restore as Independent Teacher
             user.save()
 
-            # 5. UNLINK (Record delete nahi hoga, sirf affiliation hatega)
+            # 7. THE UNLINK (Main Step)
+            # Record delete nahi hoga (Attendance/Fees safe), sirf school se nata tutega
             teacher.organization = None
             teacher.is_active_teacher = True # Marketplace ke liye active rahega
             teacher.save()
 
             return Response({
                 "status": "success",
-                "message": f"{user.get_full_name()} ko {org_obj.name} se safaltapoorvak hata diya gaya hai."
+                "message": f"{user.get_full_name()} ko {org_obj.name} se safaltapoorvak hata diya gaya hai. Purana data (Attendance/Fees) safe hai."
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
+            # Ab ye error detail mein bata dega agar koi naya locha hua toh
             return Response({"error": f"Locha ho gaya: {str(e)}"}, status=400)
     
 
