@@ -11,6 +11,7 @@ from .permissions import IsTeacherOwnerOrSchoolAdmin
 from finance.models import StaffSalary
 from finance.serializers import TeacherSalarySerializer
 from rest_framework.permissions import IsAuthenticated 
+from django.db import transaction
 
 class TeacherViewSet(viewsets.ModelViewSet):
     """
@@ -127,6 +128,53 @@ class TeacherViewSet(viewsets.ModelViewSet):
             {"message": "Join request sent successfully! Wait for school admin to accept."}, 
             status=status.HTTP_201_CREATED
         )
+
+    @action(detail=True, methods=['post'], url_path='remove-from-school')
+    @transaction.atomic
+    def remove_from_school(self, request, pk=None):
+        """
+        Bhai ye wo function hai jo teacher ko school se azad karega, 
+        lekin uska marketplace profile aur purana data safe rakhega.
+        """
+        try:
+            # 1. Teacher ko dhoondo
+            teacher = self.get_object()
+            org_obj = teacher.organization
+
+            if not org_obj:
+                return Response({"error": "Ye teacher pehle se hi kisi school se juda nahi hai."}, status=400)
+
+            # Security: Kya request karne wala admin isi school ka owner hai?
+            if org_obj.admin != request.user:
+                return Response({"error": "Bhai, aapke paas is teacher ko hatane ka haq nahi hai!"}, status=403)
+
+            user = teacher.user
+
+            # 2. TIMETABLE CLEANUP (Jo tune bola)
+            WeeklyTimetable.objects.filter(organization=org_obj, teacher=teacher).delete()
+            
+            # 3. CLASS TEACHER REMOVAL
+            Standard.objects.filter(organization=org_obj, class_teacher=teacher).update(class_teacher=None)
+
+            # 4. ROLE RESTORATION (Independent Teacher vs Normal User)
+            if not teacher.qualifications or teacher.qualifications.strip() == "":
+                user.role = 'NORMAL_USER'
+            else:
+                user.role = 'TEACHER' # Restore as Independent Teacher
+            user.save()
+
+            # 5. UNLINK (Record delete nahi hoga, sirf affiliation hatega)
+            teacher.organization = None
+            teacher.is_active_teacher = True # Marketplace ke liye active rahega
+            teacher.save()
+
+            return Response({
+                "status": "success",
+                "message": f"{user.get_full_name()} ko {org_obj.name} se safaltapoorvak hata diya gaya hai."
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({"error": f"Locha ho gaya: {str(e)}"}, status=400)
     
 
 class MySalaryView(viewsets.ReadOnlyModelViewSet):
