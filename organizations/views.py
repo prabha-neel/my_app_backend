@@ -1,4 +1,4 @@
-#views.py
+# organizations\views.py
 import logging
 from django.db import transaction
 from django.shortcuts import get_object_or_404

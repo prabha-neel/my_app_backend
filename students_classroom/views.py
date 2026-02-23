@@ -1,3 +1,5 @@
+#students_classroom\views.py
+
 from django.db import transaction
 from django.db.models import F, Count
 from django.shortcuts import get_object_or_404
@@ -323,7 +325,37 @@ class ClassroomSessionViewSet(viewsets.ModelViewSet):
         except Exception as e:
             # Operation fail hone par transaction apne aap rollback ho jayega
             raise ValidationError({"error": f"Operation fail ho gaya: {str(e)}"})
+    
+    @action(detail=True, methods=['post'], url_path='reject-request')
+    def reject_request(self, request, pk=None):
+        # 1. 'pk' yahan Session ID hai, isliye hum session dhoond rahe hain
+        session = self.get_object() 
         
+        # 2. Frontend se JoinRequest ki ID mangwao
+        request_id = request.data.get("request_id")
+        if not request_id:
+            return Response({"error": "Bhai, request_id bhejni zaroori hai!"}, status=400)
+
+        # 3. JoinRequest dhoondo jo ISI session ki ho
+        join_req = get_object_or_404(JoinRequest, pk=request_id, session=session)
+        
+        user = request.user
+        
+        # 4. Security Check (Wahi jo aapne likha tha, bas session se link kar diya)
+        is_admin = user.school_admin_profile.filter(organization=session.organization).exists()
+        
+        # Teacher check bhi add kar dete hain taaki teacher bhi reject kar sake
+        is_teacher = (session.teacher and session.teacher.user == user)
+
+        if not (is_admin or is_teacher):
+            return Response({"error": "Aap is school ke admin ya teacher nahi hain!"}, status=403)
+
+        # 5. ASLI KAAM: Reject kar do
+        join_req.status = 'REJECTED'
+        join_req.save(update_fields=['status', 'updated_at'])
+        
+        return Response({"message": "Request reject ho gayi.", "status": "REJECTED"})
+    
     def list(self, request, *args, **kwargs):
         response = super().list(request, *args, **kwargs)
         
@@ -433,19 +465,3 @@ class JoinRequestViewSet(viewsets.ModelViewSet):
             "message": "Aapki request bhej di gayi hai! 👍",
             "session_code": join_request.session.session_code
         }, status=status.HTTP_201_CREATED)
-    
-    
-    @action(detail=True, methods=['post'], url_path='reject')
-    def reject(self, request, pk=None):
-        join_req = self.get_object()
-        user = request.user
-        
-        # Check: Kya reject karne wala isi school ka admin hai?
-        is_admin = user.school_admin_profile.filter(organization=join_req.session.organization).exists()
-        
-        if not is_admin: # <--- Security Lock
-            return Response({"error": "Aap is school ke admin nahi hain!"}, status=403)
-
-        join_req.status = 'REJECTED'
-        join_req.save()
-        return Response({"message": "Request reject ho gayi."})
