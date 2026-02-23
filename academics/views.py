@@ -15,16 +15,17 @@ class MasterClassSetupView(APIView):
 
     @transaction.atomic
     def post(self, request):
-
+        # 1. Serializer ab 'School-ID' bhejoge toh accept karega (source mapping ki wajah se)
         serializer = MasterBulkSetupSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=400)
 
+        # 2. Data extraction (organization_id internally 'School-ID' se map ho gaya hai)
         data = serializer.validated_data
-        org_id = data['organization_id']
-        sections_data = data['sections_data']
+        org_id = data.get('organization_id')
+        sections_data = data.get('sections_data', [])
 
-        # 1. Security Check: Kya logged-in admin isi School ka owner hai?
+        # 3. Security Check: Kya logged-in admin isi School ka owner hai?
         try:
             org_obj = Organization.objects.get(id=org_id, admin=request.user)
         except Organization.DoesNotExist:
@@ -32,18 +33,18 @@ class MasterClassSetupView(APIView):
 
         try:
             for section in sections_data:
-                # 2. Section ko dhoondo (Confirm karo ki ye isi Org ka hai)
+                # 4. Section ko dhoondo (Confirm karo ki ye isi Org ka hai)
                 try:
                     standard_obj = Standard.objects.get(id=section['standard_id'], organization=org_obj)
                 except Standard.DoesNotExist:
                     return Response({"error": f"Section ID {section['standard_id']} is school mein nahi hai."}, status=404)
 
-                # 3. CLASS TEACHER UPDATE (Purana overwrite hoga)
+                # 5. CLASS TEACHER UPDATE (Purana overwrite hoga)
                 if section.get('class_teacher_id'):
                     standard_obj.class_teacher_id = section['class_teacher_id']
                     standard_obj.save(update_fields=['class_teacher'])
 
-                # 4. TIMETABLE LOGIC
+                # 6. TIMETABLE LOGIC
                 days = section['days']
                 periods = section['periods']
 
@@ -66,7 +67,7 @@ class MasterClassSetupView(APIView):
                                 "error": f"Conflict! {teacher_name} {day_code} P{p['period_number']} mein Class {conflict.standard.name} mein busy hain."
                             }, status=400)
 
-                        # Subject creation/retrieval
+                        # Subject creation/retrieval (Unique per organization)
                         sub_obj, _ = Subject.objects.get_or_create(
                             organization=org_obj,
                             name=p['subject_name'].strip().capitalize()
@@ -85,16 +86,19 @@ class MasterClassSetupView(APIView):
             return Response({"message": f"Mubarak ho! {org_obj.name} ka setup update ho gaya."}, status=201)
 
         except Exception as e:
-            return Response({"error": str(e)}, status=400)
+            # Agar koi bhi error aaye toh transaction rollback ho jayega
+            return Response({"error": f"Kuch locha hua: {str(e)}"}, status=400)
         
     def get(self, request):
-        org_id = request.query_params.get('organization_id')
+        # 🔥 FIX: Dono parameters check karo, pehle 'School-ID' phir 'organization_id'
+        org_id = request.query_params.get('School-ID')
         standard_id = request.query_params.get('standard_id')
 
+        # Error message bhi update kar dete hain taaki confusion na ho
         if not org_id:
-            return Response({"error": "organization_id parameter zaroori hai!"}, status=400)
+            return Response({"error": "School-ID parameter zaroori hai!"}, status=400)
 
-        # Base query
+        # Base query (Internal filter hamesha organization_id hi rahega)
         qs = WeeklyTimetable.objects.filter(organization_id=org_id).select_related(
             'standard', 'standard__class_teacher__user', 'subject', 'teacher__user'
         )
