@@ -243,7 +243,7 @@ class AdminDashboardAPIView(APIView):
         ]
 
         # 6. Notifications (Real logic placeholder)
-        from communication.models import Notification # Import yahan rakha hai safety ke liye
+        from notifications.models import Notification # Import yahan rakha hai safety ke liye
         notices_qs = Notification.objects.filter(
             Q(organization=school) | Q(global_notification=True)
         ).order_by('-created_at')[:5]
