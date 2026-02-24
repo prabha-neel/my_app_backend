@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import StaffAttendance
-from normaluser.models import NormalUser
+from normal_user.models import NormalUser
 
 class StaffMemberSerializer(serializers.ModelSerializer):
     full_name = serializers.CharField(source='get_full_name', read_only=True)

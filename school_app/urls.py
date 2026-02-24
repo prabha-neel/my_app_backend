@@ -54,4 +54,5 @@ urlpatterns = [
     path('api/v1/finance/', include('finance.urls')),
     path('api/v1/office-admin/', include('office_admin.urls')),
     path('api/v1/academics/', include('academics.urls')),
+    path('api/v1/staff/', include('staff.urls')),
 ]

@@ -438,4 +438,3 @@ class JoinRequest(models.Model):
         self.reviewed_by = teacher
         self.reviewed_at = timezone.now()
         self.save(update_fields=["reviewed_by", "reviewed_at"])
-

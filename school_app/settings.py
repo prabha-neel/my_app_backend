@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     'finance',
     'office_admin',
     'academics',
+    'notifications',
 ]
 
 # MIDDLEWARE - CORS sabse upar hona chahiye

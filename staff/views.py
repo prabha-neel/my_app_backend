@@ -6,7 +6,7 @@ from django.utils import timezone
 
 from teachers.models import Teacher
 from organizations.models import SchoolAdmin
-from normaluser.models import NormalUser
+from normal_user.models import NormalUser
 from .models import StaffAttendance
 from .serializers import StaffMemberSerializer
 from .permissions import IsSchoolAdmin
