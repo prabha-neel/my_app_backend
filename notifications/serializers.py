@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import Notification
 from django.utils.timesince import timesince
+from django.utils import timezone
 
 class NotificationSerializer(serializers.ModelSerializer):
     # Field name 'time' rakho kyunki frontend 'time' mang raha hai
@@ -8,11 +9,17 @@ class NotificationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Notification
-        fields = ['id', 'title', 'message', 'notification_type', 'is_read', 'time']
+        # organization aur global_notification bhi add kar diye hain safety ke liye
+        fields = [
+            'id', 'title', 'message', 'notification_type', 
+            'is_read', 'time', 'organization', 'global_notification'
+        ]
 
     def get_time(self, obj):
-        # Agar aaj ka hai to time, purana hai to '2 days ago'
-        from django.utils import timezone
-        if obj.created_at.date() == timezone.now().date():
-            return obj.created_at.strftime("%I:%M %p") # 10:30 AM format
-        return timesince(obj.created_at).split(',')[0] + " ago"
+        # 🎯 Aaj ka hai toh "10:30 AM", purana hai toh "2 days ago"
+        now = timezone.now()
+        if obj.created_at.date() == now.date():
+            return obj.created_at.strftime("%I:%M %p")
+        
+        # timesince logic for older notifications
+        return timesince(obj.created_at, now).split(',')[0] + " ago"

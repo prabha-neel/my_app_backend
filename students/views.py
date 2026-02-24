@@ -86,35 +86,42 @@ class StudentViewSet(viewsets.GenericViewSet):
     # 1. Minimal list for normal exploration/search
     # ────────────────────────────────────────────────
     @action(detail=False, methods=["GET"], url_path="explore")
-    # @method_decorator(cache_page(60 * 3))  <-- Filhaal ise hata de, warna data update nahi dikhega
     def explore(self, request):
-        """
-        Active students ko explore karne ke liye with Pagination.
-        """
-        q = request.query_params.get("q")
-        org_id = request.query_params.get("organization_id")
+        # 1. Header se School-ID pakdo (Frontend se 'School-ID' header aayega)
+        school_id = request.headers.get('School-ID') or request.query_params.get("organization_id")
         
-        # select_related zaroor lagana performance ke liye
-        qs = self.queryset.filter(is_active=True).select_related("user", "organization")
+        # 2. Search query (optional)
+        q = request.query_params.get("q")
 
-        if org_id:
-            qs = qs.filter(organization_id=org_id)
+        # 🎯 FIX: Agar school_id missing hai, toh data leakage rokne ke liye khali response do
+        if not school_id and not q:
+            return Response({
+                "error": "Bhai, School-ID header ya search query zaroori hai!",
+                "results": []
+            }, status=400)
+
+        # 3. Base Filter: Sirf active students
+        qs = StudentProfile.objects.filter(is_active=True).select_related("user", "organization")
+
+        # 4. Agar School-ID di hai, toh usi school par lock kar do
+        if school_id:
+            qs = qs.filter(organization_id=school_id)
+            # Yahan ab dusre school ke students nahi aa sakte!
+
+        # 5. Agar search query hai, toh results ko refine karo
         if q:
             qs = qs.filter(
                 Q(user__first_name__icontains=q) |
                 Q(user__last_name__icontains=q) |
-                Q(user__mobile__icontains=q) |
                 Q(student_unique_id__icontains=q)
             )
 
-        # Pagination Magic
+        # Pagination
         page = self.paginate_queryset(qs)
         if page is not None:
             serializer = StudentMinimalSerializer(page, many=True)
-            # Ye 'count', 'next', 'previous' aur 'results' bhejega
             return self.get_paginated_response(serializer.data)
 
-        # Fallback agar pagination configuration mein na ho
         serializer = StudentMinimalSerializer(qs, many=True)
         return Response(serializer.data)
 
@@ -288,3 +295,37 @@ class ParentDashboardView(generics.RetrieveAPIView):
             data["transport"] = "No transport service opted."
 
         return Response(data)
+    
+
+# @action(detail=False, methods=["GET"], url_path="explore")
+#     # @method_decorator(cache_page(60 * 3))  <-- Filhaal ise hata de, warna data update nahi dikhega
+#     def explore(self, request):
+#         """
+#         Active students ko explore karne ke liye with Pagination.
+#         """
+#         q = request.query_params.get("q")
+#         org_id = request.query_params.get("organization_id")
+        
+#         # select_related zaroor lagana performance ke liye
+#         qs = self.queryset.filter(is_active=True).select_related("user", "organization")
+
+#         if org_id:
+#             qs = qs.filter(organization_id=org_id)
+#         if q:
+#             qs = qs.filter(
+#                 Q(user__first_name__icontains=q) |
+#                 Q(user__last_name__icontains=q) |
+#                 Q(user__mobile__icontains=q) |
+#                 Q(student_unique_id__icontains=q)
+#             )
+
+#         # Pagination Magic
+#         page = self.paginate_queryset(qs)
+#         if page is not None:
+#             serializer = StudentMinimalSerializer(page, many=True)
+#             # Ye 'count', 'next', 'previous' aur 'results' bhejega
+#             return self.get_paginated_response(serializer.data)
+
+#         # Fallback agar pagination configuration mein na ho
+#         serializer = StudentMinimalSerializer(qs, many=True)
+#         return Response(serializer.data)
