@@ -15,6 +15,8 @@ from django_filters.rest_framework import DjangoFilterBackend
 from .permissions import IsSessionTeacherOrAdmin, CanJoinSession
 from .models import ClassroomSession, JoinRequest, Standard, JoinRequestStatus
 from .serializers import AssignClassTeacherSerializer
+from rest_framework import generics
+from rest_framework.views import APIView      
 from .serializers import (
     StandardListSerializer,
     SessionCreateSerializer,
@@ -465,3 +467,48 @@ class JoinRequestViewSet(viewsets.ModelViewSet):
             "message": "Aapki request bhej di gayi hai! 👍",
             "session_code": join_request.session.session_code
         }, status=status.HTTP_201_CREATED)
+    
+
+class PendingRequestsView(generics.ListAPIView):
+    """
+    Frontend: getPendingRequests() hit karega -> /api/v1/classroom/join-requests/
+    """
+    serializer_class = JoinRequestListSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        # Sirf wahi requests dikhao jo PENDING hain aur is admin ke school ki hain
+        qs = JoinRequest.objects.filter(status=JoinRequestStatus.PENDING).select_related('user', 'session')
+        
+        if hasattr(user, 'school_admin_profile') and user.school_admin_profile.exists():
+            org_ids = user.school_admin_profile.values_list('organization_id', flat=True)
+            return qs.filter(session__organization_id__in=org_ids)
+        
+        return qs.none()
+
+class HandleRequestView(APIView):
+    """
+    Frontend: updateRequestStatus() hit karega -> /api/v1/classroom/sessions/<session_id>/<action>-request/
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, session_id, action):
+        request_id = request.data.get('request_id')
+        session = get_object_or_404(ClassroomSession, pk=session_id)
+        join_request = get_object_or_404(JoinRequest, pk=request_id, session=session)
+
+        # 1. Action check karo (Frontend 'approve' ya 'reject' bhej raha hai)
+        if action == 'approve':
+            # Tera existing model logic call karo jo profile banata hai
+            success, message = session.accept_join_request(join_request)
+            if not success:
+                return Response({"error": message}, status=400)
+            return Response({"status": "success", "message": "Request Approved!"})
+
+        elif action == 'reject':
+            join_request.status = JoinRequestStatus.REJECTED
+            join_request.save()
+            return Response({"status": "success", "message": "Request Rejected!"})
+
+        return Response({"error": "Invalid action"}, status=400)
