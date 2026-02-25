@@ -18,7 +18,7 @@ from .serializers import (
   AdminSalarySerializer
 )
 from .pagination import FinancePagination
-from django.db.models import OuterRef, Subquery, Sum, Q, Count
+from django.db.models import OuterRef, Subquery, Sum, Q, Count, Max
 from django.db.models.functions import Coalesce
 from decimal import Decimal
 
@@ -136,8 +136,60 @@ class FeeCollectionViewSet(viewsets.ModelViewSet):
             })
 
         return Response({"summary": summary_data, "transactions": transactions_data})
+  
+  @action(detail=False, methods=['get'], url_path='pending-dues')
+  def get_all_pending_dues(self, request):
+    school_id = self._get_school_id(request)
+    from students.models import StudentProfile
 
+    # 1. Wahi Subqueries jo humne report mein banayi thi
+    total_payable_subquery = FeeStructure.objects.filter(
+        standard=OuterRef('current_standard')
+    ).values('standard').annotate(total=Sum('amount')).values('total')
 
+    total_paid_subquery = FeePayment.objects.filter(
+        student=OuterRef('pk'), status='SUCCESS'
+    ).values('student').annotate(total=Sum('amount')).values('total')
+    
+    # Last Paid Date nikalne ke liye
+    last_paid_subquery = FeePayment.objects.filter(
+        student=OuterRef('pk'), status='SUCCESS'
+    ).values('student').annotate(last_date=Max('date')).values('last_date')
+
+    # 2. Queryset taiyar karo jo Pending Dues walo ko filter kare
+    students_qs = StudentProfile.objects.filter(
+        organization_id=school_id, 
+        is_active=True
+    ).annotate(
+        payable=Coalesce(Subquery(total_payable_subquery), Decimal('0.00')),
+        paid=Coalesce(Subquery(total_paid_subquery), Decimal('0.00')),
+        last_paid=Subquery(last_paid_subquery)
+    )
+
+    # Sirf wahi bache uthao jinka dues 0 se zyada hai
+    pending_list = []
+    for s in students_qs:
+        due = s.payable - s.paid
+        if due > 0:
+            pending_list.append({
+                "student_id": str(s.id),
+                "name": s.user.get_full_name(),
+                "roll_no": s.roll_number or "N/A",
+                "class_name": s.current_standard.name if s.current_standard else "N/A",
+                "section_name": s.current_standard.section if s.current_standard else "N/A",
+                "due_amount": float(due),
+                "last_paid_date": s.last_paid.strftime("%d-%b-%Y") if s.last_paid else "Never",
+                "parent_contact": s.parent_contact_number or "N/A"
+            })
+
+    # Pagination handle karne ke liye (Simple version)
+    page = self.paginate_queryset(pending_list)
+    if page is not None:
+        return self.get_paginated_response(page)
+
+    return Response({"results": pending_list})
+  
+  
   @action(detail=False, methods=['post'], url_path='collect')
   @transaction.atomic
   def collect(self, request):
