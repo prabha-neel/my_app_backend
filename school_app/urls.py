@@ -56,4 +56,5 @@ urlpatterns = [
     path('api/v1/academics/', include('academics.urls')),
     path('api/v1/staff/', include('staff.urls')),
     path('api/v1/notifications/', include('notifications.urls')),
+    path('api/v1/profiles/', include('user_profiles.urls')),
 ]

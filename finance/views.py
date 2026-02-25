@@ -129,6 +129,55 @@ class FeeCollectionViewSet(viewsets.ModelViewSet):
               return Response(FeeCategorySerializer(category).data, status=201)
           return Response(serializer.errors, status=400)
 
+  @action(detail=False, methods=['get'], url_path='pending-dues')
+  def pending_dues(self, request):
+        school_id = self._get_school_id(request)
+        if not school_id:
+            return Response({"error": "school_id header is required!"}, status=400)
+
+        standard_id = request.query_params.get('standard_id')
+        
+        # 1. Pehle saare active students uthao
+        from students.models import StudentProfile
+        students_qs = StudentProfile.objects.filter(organization_id=school_id, is_active=True)
+        
+        if standard_id:
+            students_qs = students_qs.filter(current_standard_id=standard_id)
+
+        pending_list = []
+        
+        for student in students_qs:
+            # A. Is student ki class ke liye total fees kitni set hai?
+            total_payable = FeeStructure.objects.filter(
+                standard=student.current_standard
+            ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+
+            # B. Is student ne ab tak kitni fees bhari hai?
+            total_paid = FeePayment.objects.filter(
+                student=student, 
+                status='SUCCESS'
+            ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+
+            # C. Calculation
+            due_amount = total_payable - total_paid
+
+            # D. Agar kuch baaki hai, toh list mein daalo
+            if due_amount > 0:
+                pending_list.append({
+                    "student_id": student.id,
+                    "student_name": student.user.get_full_name(),
+                    "student_uid": student.student_unique_id,
+                    "class": f"{student.current_standard.name} ({student.current_standard.section})" if student.current_standard else "N/A",
+                    "total_fees": float(total_payable),
+                    "paid_fees": float(total_paid),
+                    "pending_amount": float(due_amount),
+                })
+
+        return Response({
+            "count": len(pending_list),
+            "results": pending_list
+        })
+
 class FeeStructureViewSet(viewsets.ModelViewSet):
    queryset = FeeStructure.objects.all()
    serializer_class = FeeStructureCreateSerializer

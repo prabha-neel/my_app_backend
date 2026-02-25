@@ -3,13 +3,15 @@ from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.throttling import ScopedRateThrottle
 from django.utils import timezone
-
 from teachers.models import Teacher
 from organizations.models import SchoolAdmin
 from normal_user.models import NormalUser
 from .models import StaffAttendance
 from .serializers import StaffMemberSerializer
 from .permissions import IsSchoolAdmin
+from django.db.models import Count
+from .serializers import StaffMemberSerializer, StaffAttendanceSerializer 
+
 
 class StaffAttendanceViewSet(viewsets.ViewSet):
     # 🔐 Security Layers
@@ -71,3 +73,40 @@ class StaffAttendanceViewSet(viewsets.ViewSet):
                 }
             )
         return Response({"message": "Attendance updated successfully!"}, status=status.HTTP_200_OK)
+    
+    @action(detail=True, methods=['get'], url_path='monthly-report')
+    def monthly_report(self, request, pk=None):
+        """
+        URL: /api/v1/staff/staff-attendance/<user_id>/monthly-report/?month=2&year=2026
+        """
+        org_id = self.get_org_id(request)
+        if not org_id:
+            return Response({"error": "School_ID header missing"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. Month aur Year handle karo (Default: Current Month)
+        now = timezone.now()
+        month = int(request.query_params.get('month', now.month))
+        year = int(request.query_params.get('year', now.year))
+
+        # 2. Specific Teacher/Staff ka data nikalo
+        # pk yahan user_id hai kyunki detail=True hai
+        attendance_records = StaffAttendance.objects.filter(
+            organization_id=org_id,
+            user_id=pk,
+            date__month=month,
+            date__year=year
+        ).order_by('date')
+
+        # 3. Summary calculate karo (Kitne din Present, Absent, etc.)
+        summary = attendance_records.values('status').annotate(count=Count('status'))
+
+        # 4. Data format karo
+        serializer = StaffAttendanceSerializer(attendance_records, many=True)
+        
+        return Response({
+            "user_id": pk,
+            "month": month,
+            "year": year,
+            "summary": {item['status']: item['count'] for item in summary},
+            "records": serializer.data
+        })

@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     'office_admin',
     'academics',
     'notifications',
+    'user_profiles',
 ]
 
 # MIDDLEWARE - CORS sabse upar hona chahiye
@@ -139,13 +140,15 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.ScopedRateThrottle',
         'rest_framework.throttling.UserRateThrottle',  # <-- Ye added hai
-        'rest_framework.throttling.AnonRateThrottle',  # <-- Ye added hai
+        'rest_framework.throttling.AnonRateThrottle',  # <-- Ye added hai   
     ],
     'DEFAULT_THROTTLE_RATES': {
         'organization_api': '100/day',
         'user': '1000/day',   # <-- Ye line zaroori hai (Fixes the KeyError: 'user')
         'anon': '100/day',    # <-- Safety ke liye
         'attendance_ops':'30/minute',
+        'profile_api': '30/minute', # Profile update jaisi sensitive cheezein
+        'dashboard_api': '60/minute', # Dashboard reload limit
     },
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }

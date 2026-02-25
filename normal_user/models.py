@@ -162,6 +162,3 @@ class NormalUser(AbstractUser):
     def permanent_delete(self):
         """Admin only – real delete"""
         super().delete()
-
-
-
