@@ -169,17 +169,28 @@ class FeeCollectionViewSet(viewsets.ModelViewSet):
     # Sirf wahi bache uthao jinka dues 0 se zyada hai
     pending_list = []
     for s in students_qs:
-        due = s.payable - s.paid
+        # Payable aur Paid ka gap nikaalo
+        payable = s.payable or Decimal('0.00')
+        paid = s.paid or Decimal('0.00')
+        due = payable - paid
+        
         if due > 0:
             pending_list.append({
                 "student_id": str(s.id),
                 "name": s.user.get_full_name(),
-                "roll_no": s.roll_number or "N/A",
+                
+                # 🚩 Fix 1: student_unique_id use karo (Jo tere model mein hai)
+                "roll_no": s.student_unique_id or "N/A",
+                
                 "class_name": s.current_standard.name if s.current_standard else "N/A",
-                "section_name": s.current_standard.section if s.current_standard else "N/A",
+                "section_name": getattr(s.current_standard, 'section', 'N/A'),
                 "due_amount": float(due),
+                
+                # 🚩 Fix 2: Last paid date formatting
                 "last_paid_date": s.last_paid.strftime("%d-%b-%Y") if s.last_paid else "Never",
-                "parent_contact": s.parent_contact_number or "N/A"
+                
+                # 🚩 Fix 3: Mobile number user model se uthao (Phone field settings.AUTH_USER_MODEL mein hoga)
+                "parent_contact": getattr(s.user, 'phone', 'N/A') 
             })
 
     # Pagination handle karne ke liye (Simple version)
