@@ -18,6 +18,10 @@ from .serializers import (
   AdminSalarySerializer
 )
 from .pagination import FinancePagination
+from django.db.models import OuterRef, Subquery, Sum, Q, Count
+from django.db.models.functions import Coalesce
+from decimal import Decimal
+
 
 class FeeCollectionViewSet(viewsets.ModelViewSet):
   """
@@ -56,47 +60,83 @@ class FeeCollectionViewSet(viewsets.ModelViewSet):
 
   @action(detail=False, methods=['get'], url_path='report')
   def get_report(self, request):
-      school_id = self._get_school_id(request)
-      if not school_id:
-          return Response({"error": "school_id header is required!"}, status=status.HTTP_400_BAD_REQUEST)
+        school_id = self._get_school_id(request)
+        if not school_id:
+            return Response({"error": "school_id header is required!"}, status=status.HTTP_400_BAD_REQUEST)
 
-      from_date = request.query_params.get('from_date')
-      to_date = request.query_params.get('to_date')
+        from students.models import StudentProfile
 
-      qs = self.get_queryset()
-      if from_date and to_date:
-          qs = qs.filter(date__date__range=[from_date, to_date])
+        # --- PART 1: Naya Fast Pending Dues Logic (Subqueries) ---
+        total_payable_subquery = FeeStructure.objects.filter(
+            standard=OuterRef('current_standard')
+        ).values('standard').annotate(
+            total=Sum('amount')
+        ).values('total')
 
-      today = timezone.now().date()
-      stats = qs.aggregate(
-          total_sum=Sum('amount'),
-          online=Sum('amount', filter=Q(payment_mode='Online')),
-          offline=Sum('amount', filter=Q(payment_mode='Offline')),
-          count=Count('id')
-      )
-      today_total = qs.filter(date__date=today).aggregate(Sum('amount'))['amount__sum'] or 0
+        total_paid_subquery = FeePayment.objects.filter(
+            student=OuterRef('pk'),
+            status='SUCCESS'
+        ).values('student').annotate(
+            total=Sum('amount')
+        ).values('total')
 
-      summary_data = {
-          "today_collection": float(today_total),
-          "month_collection": float(stats['total_sum'] or 0),
-          "pending_dues": 0.0,
-          "online_collection": float(stats['online'] or 0),
-          "offline_collection": float(stats['offline'] or 0),
-          "total_transactions": int(stats['count'] or 0),
-      }
+        students_stats = StudentProfile.objects.filter(
+            organization_id=school_id, 
+            is_active=True
+        ).annotate(
+            payable=Coalesce(Subquery(total_payable_subquery), Decimal('0.00')),
+            paid=Coalesce(Subquery(total_paid_subquery), Decimal('0.00'))
+        ).aggregate(
+            grand_total_payable=Sum('payable'),
+            grand_total_paid=Sum('paid')
+        )
 
-      transactions_data = []
-      for txn in qs.order_by('-date')[:50]:
-          transactions_data.append({
-              "student_name": txn.student.user.get_full_name(),
-              "class_name": f"{txn.student.current_standard.name if txn.student.current_standard else 'N/A'}",
-              "amount": float(txn.amount),
-              "payment_mode": txn.payment_mode,
-              "transaction_id": txn.receipt_no or str(txn.id),
-              "date": txn.date.strftime("%d-%b-%Y"),
-          })
+        actual_pending_dues = (students_stats['grand_total_payable'] or 0) - (students_stats['grand_total_paid'] or 0)
 
-      return Response({"summary": summary_data, "transactions": transactions_data})
+        # --- PART 2: Tera Purana Collection Stats Logic ---
+        from_date = request.query_params.get('from_date')
+        to_date = request.query_params.get('to_date')
+
+        qs = self.get_queryset()
+        if from_date and to_date:
+            qs = qs.filter(date__date__range=[from_date, to_date])
+
+        today = timezone.now().date()
+
+        # Report ke andar ye change kar lo:
+        stats = qs.aggregate(
+            total_sum=Sum('amount'),
+            # Online = UPI + BANK_TRANSFER
+            online=Sum('amount', filter=Q(payment_mode='UPI') | Q(payment_mode='BANK_TRANSFER')),
+            # Offline = CASH + CHEQUE
+            offline=Sum('amount', filter=Q(payment_mode='CASH') | Q(payment_mode='CHEQUE')),
+            count=Count('id')
+        )
+        today_total = qs.filter(date__date=today).aggregate(Sum('amount'))['amount__sum'] or 0
+
+        # --- PART 3: Response taiyar karna (Sab kuch merge karke) ---
+        summary_data = {
+            "today_collection": float(today_total),
+            "month_collection": float(stats['total_sum'] or 0),
+            "pending_dues": float(actual_pending_dues), # Naya Logic
+            "online_collection": float(stats['online'] or 0),
+            "offline_collection": float(stats['offline'] or 0),
+            "total_transactions": int(stats['count'] or 0),
+        }
+
+        transactions_data = []
+        for txn in qs.order_by('-date')[:50]:
+            transactions_data.append({
+                "student_name": txn.student.user.get_full_name(),
+                "class_name": f"{txn.student.current_standard.name if txn.student.current_standard else 'N/A'}",
+                "amount": float(txn.amount),
+                "payment_mode": txn.payment_mode,
+                "transaction_id": txn.receipt_no or str(txn.id),
+                "date": txn.date.strftime("%d-%b-%Y"),
+            })
+
+        return Response({"summary": summary_data, "transactions": transactions_data})
+
 
   @action(detail=False, methods=['post'], url_path='collect')
   @transaction.atomic
@@ -128,55 +168,6 @@ class FeeCollectionViewSet(viewsets.ModelViewSet):
               category = serializer.save()
               return Response(FeeCategorySerializer(category).data, status=201)
           return Response(serializer.errors, status=400)
-
-  @action(detail=False, methods=['get'], url_path='pending-dues')
-  def pending_dues(self, request):
-        school_id = self._get_school_id(request)
-        if not school_id:
-            return Response({"error": "school_id header is required!"}, status=400)
-
-        standard_id = request.query_params.get('standard_id')
-        
-        # 1. Pehle saare active students uthao
-        from students.models import StudentProfile
-        students_qs = StudentProfile.objects.filter(organization_id=school_id, is_active=True)
-        
-        if standard_id:
-            students_qs = students_qs.filter(current_standard_id=standard_id)
-
-        pending_list = []
-        
-        for student in students_qs:
-            # A. Is student ki class ke liye total fees kitni set hai?
-            total_payable = FeeStructure.objects.filter(
-                standard=student.current_standard
-            ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
-
-            # B. Is student ne ab tak kitni fees bhari hai?
-            total_paid = FeePayment.objects.filter(
-                student=student, 
-                status='SUCCESS'
-            ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
-
-            # C. Calculation
-            due_amount = total_payable - total_paid
-
-            # D. Agar kuch baaki hai, toh list mein daalo
-            if due_amount > 0:
-                pending_list.append({
-                    "student_id": student.id,
-                    "student_name": student.user.get_full_name(),
-                    "student_uid": student.student_unique_id,
-                    "class": f"{student.current_standard.name} ({student.current_standard.section})" if student.current_standard else "N/A",
-                    "total_fees": float(total_payable),
-                    "paid_fees": float(total_paid),
-                    "pending_amount": float(due_amount),
-                })
-
-        return Response({
-            "count": len(pending_list),
-            "results": pending_list
-        })
 
 class FeeStructureViewSet(viewsets.ModelViewSet):
    queryset = FeeStructure.objects.all()
@@ -290,3 +281,52 @@ class SalaryManagementViewSet(viewsets.ModelViewSet):
     @transaction.atomic
     def perform_update(self, serializer):
         serializer.save(processed_by=self.request.user)
+
+
+
+
+
+
+# @action(detail=False, methods=['get'], url_path='report')
+#   def get_report(self, request):
+#       school_id = self._get_school_id(request)
+#       if not school_id:
+#           return Response({"error": "school_id header is required!"}, status=status.HTTP_400_BAD_REQUEST)
+
+#       from_date = request.query_params.get('from_date')
+#       to_date = request.query_params.get('to_date')
+
+#       qs = self.get_queryset()
+#       if from_date and to_date:
+#           qs = qs.filter(date__date__range=[from_date, to_date])
+
+#       today = timezone.now().date()
+#       stats = qs.aggregate(
+#           total_sum=Sum('amount'),
+#           online=Sum('amount', filter=Q(payment_mode='Online')),
+#           offline=Sum('amount', filter=Q(payment_mode='Offline')),
+#           count=Count('id')
+#       )
+#       today_total = qs.filter(date__date=today).aggregate(Sum('amount'))['amount__sum'] or 0
+
+#       summary_data = {
+#           "today_collection": float(today_total),
+#           "month_collection": float(stats['total_sum'] or 0),
+#           "pending_dues": 0.0,
+#           "online_collection": float(stats['online'] or 0),
+#           "offline_collection": float(stats['offline'] or 0),
+#           "total_transactions": int(stats['count'] or 0),
+#       }
+
+#       transactions_data = []
+#       for txn in qs.order_by('-date')[:50]:
+#           transactions_data.append({
+#               "student_name": txn.student.user.get_full_name(),
+#               "class_name": f"{txn.student.current_standard.name if txn.student.current_standard else 'N/A'}",
+#               "amount": float(txn.amount),
+#               "payment_mode": txn.payment_mode,
+#               "transaction_id": txn.receipt_no or str(txn.id),
+#               "date": txn.date.strftime("%d-%b-%Y"),
+#           })
+
+#       return Response({"summary": summary_data, "transactions": transactions_data})
