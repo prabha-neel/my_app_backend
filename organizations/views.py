@@ -1,37 +1,37 @@
 # organizations\views.py
 import logging
-from django.db import transaction
-from django.shortcuts import get_object_or_404
-from django.db.models import Sum, Q, Count
-from django.utils import timezone
 from decimal import Decimal
+from django.utils import timezone
+from django.db import transaction
+from django.db.models import Sum, Q, Count
+from django.contrib.auth import get_user_model
+
+# REST Framework Imports
 from rest_framework import viewsets, permissions, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.throttling import UserRateThrottle, ScopedRateThrottle
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.views import APIView
-from django_filters.rest_framework import DjangoFilterBackend
+
+# Local App Models & Serializers
 from .models import Organization, SchoolAdmin
-from .serializers import OrganizationSerializer, SchoolAdminProfileSerializer
-from django.contrib.auth import get_user_model
-User = get_user_model()
 from .serializers import (
     OrganizationSerializer, 
     OrganizationDetailSerializer,
     SchoolAdminProfileSerializer,
-    SchoolAdminUserSerializer     # <--- Login logic ke liye zaruri hai
+    SchoolAdminUserSerializer
 )
+
+# --- Other App Models (SAHI PATHS) ---
 from students.models import StudentProfile
 from teachers.models import Teacher
-from attendance.models import Attendance
-from finance.models import FeePayment
+from attendance.models import Attendance    # ✅ Attendance ki apni app hai
+from finance.models import FeePayment       # ✅ Finance ki apni app hai
 
-# Custom Permissions Import (Inhe check kar lena tumhare permissions.py mein hain)
-# from .permissions import IsStaffOrReadOnly, IsOrganizationMember
-
+User = get_user_model()
 logger = logging.getLogger(__name__)
 
 # ────────────────────────────────────────────────
@@ -198,38 +198,35 @@ class AdminDashboardAPIView(APIView):
         user = request.user
         school = None
         
-        # Pehle check karo user admin profile se linked hai ya nahi
         admin_profile = getattr(user, 'school_admin_profile', None)
         if admin_profile:
-            # .first() use kiya kyunki profile related name query set ho sakta hai
             profile = admin_profile.first() if hasattr(admin_profile, 'all') else admin_profile
             school = profile.organization if profile else None
 
         if not school:
-            return Response({"error": "No organization linked to this account."}, status=404)
+            return Response({"success": False, "message": "No organization linked."}, status=404)
 
         today = timezone.now().date()
         month_start = today.replace(day=1)
 
-        # 2. Stats (Performance: Count is fast)
+        # 2. Stats
         total_students = StudentProfile.objects.filter(organization=school, is_active=True).count()
         total_teachers = Teacher.objects.filter(organization=school, is_active_teacher=True).count()
 
         # 3. Attendance
         s_attendance = Attendance.objects.filter(student__organization=school, date=today)
-        # Ek hi query mein filters lagana efficient hai
         student_stats = {
             "present": s_attendance.filter(status='PRESENT').count(),
             "absent": s_attendance.filter(status='ABSENT').count(),
             "leave": s_attendance.filter(status='LEAVE').count(),
         }
 
-        # 4. Finance (Safety: Ensure Decimal fallback)
+        # 4. Finance
         fee_qs = FeePayment.objects.filter(student__organization=school, status='SUCCESS')
         today_fee = fee_qs.filter(date__date=today).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
         monthly_fee = fee_qs.filter(date__date__gte=month_start).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
 
-        # 5. Recent Admissions (Optimization: select_related lagaya hai)
+        # 5. Recent Admissions
         recent_students = StudentProfile.objects.filter(organization=school)\
             .select_related('user', 'current_standard')\
             .order_by('-created_at')[:5]
@@ -242,8 +239,10 @@ class AdminDashboardAPIView(APIView):
             } for s in recent_students
         ]
 
-        # 6. Notifications (Real logic placeholder)
-        from notifications.models import Notification # Import yahan rakha hai safety ke liye
+        # 6. Notifications & Real Unread Count (The Fix!)
+        from notifications.models import Notification 
+        
+        # Dashboard ke liye latest 5 notices
         notices_qs = Notification.objects.filter(
             Q(organization=school) | Q(global_notification=True)
         ).order_by('-created_at')[:5]
@@ -256,7 +255,21 @@ class AdminDashboardAPIView(APIView):
             } for n in notices_qs
         ]
 
+        # 🚩 YE HAI DYNAMIC COUNT: Jo asli notifications ginega
+        unread_count = Notification.objects.filter(recipient=user, is_read=False).count()
+
+        # 7. Final Response (Flutter Friendly)
         return Response({
+            "success": True,
+            "message": "Dashboard data fetched successfully",
+            "unread_count": unread_count,           # Ab ye dynamic hai!
+            "active_sessions": 1,                   # Placeholder (Actual session count logic baad mein daal sakte hain)
+            "admin_name": user.get_full_name() or user.username,
+            "admin_email": user.email,
+            "school_id": str(school.id) if school else None,
+            "organization_name": school.name if school else "N/A",
+            
+            # Aapka existing data
             "total_students": total_students,
             "total_teachers": total_teachers,
             "student_attendance": student_stats,

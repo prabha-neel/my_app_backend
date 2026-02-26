@@ -1,20 +1,34 @@
+#students/views.py
 import logging
-from django.db import transaction
+import uuid  # 👈 UUID validation ke liye
+from django.db import transaction, models
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
+from django.contrib.auth import get_user_model
 from django.utils.decorators import method_decorator
-from django.views.decorators.cache import cache_page
-from rest_framework import viewsets, permissions, status, generics
-from rest_framework import permissions
+from django.core.cache import cache
+
+# DRF Imports
+from rest_framework import viewsets, status, generics, permissions
+from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError, PermissionDenied
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.throttling import UserRateThrottle
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Q
-from django.contrib.auth import get_user_model
-User = get_user_model()
-from .models import StudentProfile, StudentSession, StudentResult, StudentFee, ParentConnection
+
+# Third Party (Ratelimit)
+from django_ratelimit.decorators import ratelimit
+
+# Local App Imports
+from .models import (
+    StudentProfile, 
+    StudentSession, 
+    StudentResult, 
+    StudentFee, 
+    ParentConnection
+)
 from .serializers import (
     StudentProfileSerializer,
     StudentMinimalSerializer,
@@ -22,16 +36,16 @@ from .serializers import (
     StudentResultSerializer,
     StudentFeeSerializer,
     ParentRequestSerializer,
+    StudentSummarySerializer, # 👈 Ye bhi ensure kar lena ki add hai
 )
-
-
-# Custom Permissions (Jo humne permissions.py mein banayi hain)
 from .permissions import (
     IsStudentOwnerOrStaff, 
     IsTeacherOfStudent, 
     CanApproveParentRequest
 )
 
+# Initializations
+User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
@@ -101,7 +115,7 @@ class StudentViewSet(viewsets.GenericViewSet):
             }, status=400)
 
         # 3. Base Filter: Sirf active students
-        qs = StudentProfile.objects.filter(is_active=True).select_related("user", "organization")
+        qs = StudentProfile.objects.filter(is_active=True).select_related("user", "organization", "current_standard")
 
         # 4. Agar School-ID di hai, toh usi school par lock kar do
         if school_id:
@@ -295,6 +309,83 @@ class ParentDashboardView(generics.RetrieveAPIView):
             data["transport"] = "No transport service opted."
 
         return Response(data)
+    
+
+class StudentSummaryThrottle(UserRateThrottle):
+    rate = '30/minute'
+
+class AdminStudentSummaryView(APIView):
+    """
+    Admin ke liye bache ka 360-degree view (Attendance + Fees + Marks)
+    UUID Header Security aur Caching ke saath.
+    """
+    permission_classes = [IsAuthenticated]
+    # Ek user 1 minute mein max 30 requests kar payega
+    throttle_classes = [StudentSummaryThrottle]
+
+    @method_decorator(ratelimit(key='ip', rate='50/5m', method='GET', block=True))
+    def get(self, request, student_id):
+        user = request.user
+        
+        # 1. Header se UUID nikalna aur Validate karna
+        header_school_id = request.META.get('HTTP_SCHOOL_ID')
+        if not header_school_id:
+            return Response({"success": False, "message": "School-ID header is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Check kar rahe hain ki UUID sahi format mein hai ya nahi
+            valid_school_uuid = uuid.UUID(header_school_id)
+        except ValueError:
+            return Response({"success": False, "message": "Invalid School-ID format."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 2. Role-Based Access Control (RBAC)
+        if not (user.is_staff or user.role == 'SCHOOL_ADMIN'):
+            logger.warning(f"Unauthorized access attempt by user {user.id}")
+            return Response({"success": False, "message": "Aapke paas access nahi hai."}, status=status.HTTP_403_FORBIDDEN)
+
+        # 3. Security: Kya ye admin isi school se linked hai?
+        if not user.is_superuser:
+            is_authorized = user.school_admin_profile.filter(organization__id=header_school_id).exists()
+            if not is_authorized:
+                return Response({"success": False, "message": "Unauthorized school access."}, status=status.HTTP_403_FORBIDDEN)
+
+        # 4. Cache Check (Speed ke liye)
+        cache_key = f"stu_summary_{header_school_id}_{student_id}"
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return Response({"success": True, "data": cached_data, "source": "cache"})
+
+        # 5. Database Fetch with Optimization (N+1 query fix)
+        # organization__id UUID check ke saath filter kar rahe hain
+        student = StudentProfile.objects.select_related('user', 'current_standard', 'organization')\
+            .prefetch_related(
+                'attendance_records', 
+                'fees', 
+                'results',
+                'results__subject', 
+                'results__exam'
+            ).filter(id=student_id, organization__id=header_school_id).first()
+
+        if not student:
+            return Response({"success": False, "message": "Student nahi mila ya wo is school ka nahi hai."}, status=status.HTTP_404_NOT_FOUND)
+
+        # 6. Serialization
+        from .serializers import StudentSummarySerializer
+        serializer = StudentSummarySerializer(student)
+        data = serializer.data
+        
+        # Security ke liye org_id data mein bhi rakhenge
+        data['organization_id'] = str(header_school_id)
+
+        # 7. Set Cache for 15 minutes
+        cache.set(cache_key, data, 900)
+
+        return Response({
+            "success": True, 
+            "message": "Student summary fetched successfully",
+            "data": data,
+            "source": "database"
+        })
     
 
 # @action(detail=False, methods=["GET"], url_path="explore")
